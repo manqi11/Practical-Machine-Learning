@@ -1,0 +1,112 @@
+---
+title: "Practical Machine Learning--Predict Users’ Excercises"
+author: "P. Zhou"
+date: "11/27/2017"
+output: html_document
+---
+###1. Read in and preprocess datasets
+Training data and testing data are loaded. Variables with over 10% missing values were removed from the final analysis. Only the highly relevant variables were kept. Specific user and time related varaibles were excluded.
+```{r echo=TRUE,cache=T}
+testing<-read.csv("pml-testing.csv",header=TRUE)
+training<-read.csv("pml-training.csv",header=TRUE)
+class(training$classe)
+```
+
+Remove features with mostly missing values based on training data
+```{r echo=TRUE,cache=T}
+na_ratio<-apply(training,2,function(x) sum(is.na(x))/length(x))
+summary(na_ratio)
+training_rm<- na_ratio > 0.5
+table(training_rm)
+training<-training[, !training_rm]
+# The first variable "X" is just index. I removed it from the final data.
+training<-training[,-1]
+```
+Only keep the highly relevant variables in the dataset, excluding the specific user name relatived or time #related variables
+```{r echo=T, cache=T}
+training<-training[,-grep("user|time|window",colnames(training))]
+```
+Because my laptop does not have low capacity to process the whole dataset, I randomly selected approximately 1000 data points to analyze. 
+```{r echo=TRUE,cache=T}
+sub_training<-training[sample(nrow(training),1000),]
+dim(sub_training)
+```
+###2. Build predictive model 
+I used Random Forest (RF) as the predictive method in model fitting, because Random Forest usually has high predictive performance and yield very low error rate should be very low error rate. All varaibles from the processed training data were used as predictors. I applied three times of 5-fold cross-validation to evaluate out-of-sample error. The final model is presented. The results from the confusion matrix model demonstated that the error rate is very low for all 5 classes. 
+
+```{r echo=TRUE, cache=T}
+set.seed(1234)
+library(caret)
+library(gbm)
+library(AppliedPredictiveModeling)
+library(parallel)
+library(doParallel)
+cluster <- makeCluster(detectCores() - 1) # convention to leave 1 core for OS
+registerDoParallel(cluster)
+library(iterators)
+library(foreach)
+library(iterators)
+library(randomForest)
+
+controldata<-trainControl(method="repeatedcv", number=5,repeats=3, allowParallel = TRUE)
+fit_mod<-train(classe~.,data=sub_training, method="rf",trControl=controldata)
+fit_mod
+print(fit_mod$finalModel)
+
+
+## 3 repeats of 5 fold cross-validation 
+controldata<-trainControl(method="repeatedcv", number=5,repeats=3)
+fit_mod<-train(classe~.,data=sub_training, method="rf",trControl=controldata)
+print(fit_mod)
+print(fit_mod$finalModel)
+```
+###3. Out-of-bag error
+Out-of-bag error is "a method of measuring the prediction error of random forests, boosted decision trees, and other machine learning models utilizing bootstrap aggregating to sub-sample data samples used for training. OOB is the mean prediction error on each training sample xᵢ, using only the trees that did not have xᵢ in their bootstrap sample".
+I used the 3 repeats of 5-fold cross-validation to evaluate out-of-sample error. 
+When I used Random Forest, it automatically generated out-of-bag error estimates. I generated a violin plot below. From this plot, 
+we can visually see that both the out-of-bag error and cross validation methods provide similar estimates of mean error rates. 
+The cross validation had a mean around 0.11 while out-of-bag error showed a mean around 0.09. 
+
+```{r,message=FALSE,warning=FALSE}
+```{r,echo=TRUE}
+library(vioplot)
+opt <- options(scipen = 3)
+cv_error<-1-fit_mod$resample$Accuracy
+outOfBag_error<-fit_mod$finalModel$err.rate[,"OOB"]
+vioplot(cv_error,outOfBag_error,names=c("Cross-validation error","Out-of-bag error"))
+title("Violin plot of error rates based on cross validation and Out-of-bag error")
+```
+
+###4. Plot variable importance
+In order to know which varaible contribute the most to the predictive performance, I create a variable importance plot. From the plot, I found that the most important varaible in terms of contributing to the predictive performance is "roll belt". The second most imporatance varaible is "yaw belt".  
+
+```{r,fig.height=6,message=FALSE,warning=FALSE, echo=T, cache=T}
+library(randomForest)
+varImpPlot(fit_mod$finalModel,main="Variable Importance",pach=20)
+```
+
+###5. Predict the testing data 
+In section5, I generated the predictions for the test data. 
+First I need to make the testing data has the same columns as the traning dataset
+#```{r,echo= TRUE}
+#testing<-testing[,!training_rm]
+#testing<-testing[,-1]
+#testing<-testing[,-grep("problem_id",colnames(testing))]
+#testing<-testing[,-grep("user|time|window",colnames(testing))]
+#```
+
+```{r,echo=TRUE}
+library(caret)
+library(randomForest)
+predicted<-predict(fit_mod$finalModel,data=testing)
+answers<-as.character(predicted)
+
+predict_WriteFiles = function(x){
+  n = length(x)
+  for(i in 1:n){
+    filename = paste0("problem_id_",i,".txt")
+    write.table(x[i],file=filename,quote=FALSE,row.names=FALSE,col.names=FALSE)
+  }
+}
+predict_WriteFiles(answers)
+```
